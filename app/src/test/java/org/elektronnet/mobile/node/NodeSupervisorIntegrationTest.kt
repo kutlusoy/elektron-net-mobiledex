@@ -13,7 +13,10 @@ class NodeSupervisorIntegrationTest {
         val binary = System.getenv("ELEKTROND_BIN")
         assumeTrue("ELEKTROND_BIN not set", binary != null && File(binary).canExecute())
         val dir = Files.createTempDirectory("node-it").toFile()
-        val config = NodeConfig(File(binary!!), dir, Chain.Regtest, rpcPort = 28332, p2pPort = 28333, listen = false)
+        // free ports: a running devnet forwards 28332/28333 to a phone, so fixed
+        // numbers make this test fail with "Unable to bind any endpoint for RPC server"
+        fun freePort(): Int = java.net.ServerSocket(0).use { it.localPort }
+        val config = NodeConfig(File(binary!!), dir, Chain.Regtest, rpcPort = freePort(), p2pPort = freePort(), listen = false)
         val node = NodeSupervisor(config, pollIntervalMs = 100)
         node.start()
         val end = System.currentTimeMillis() + 60_000
