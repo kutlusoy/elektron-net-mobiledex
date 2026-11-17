@@ -509,7 +509,10 @@ object NodeHost {
         val supervisor = runningSupervisor() ?: return null
         val root = datadir ?: return null
         val chain = Chain.fromBuildName(ChainConfig.chain)
-        return org.elektronnet.mobile.wallet.WalletRestore(supervisor.rpc.asWalletRpc()) { name ->
+        return org.elektronnet.mobile.wallet.WalletRestore(
+            supervisor.rpc.asWalletRpc(),
+            testnet = chain == Chain.Testnet,
+        ) { name ->
             org.elektronnet.mobile.wallet.deleteWalletEverywhere(root, chain.subdir, name)
         }
     }
@@ -523,10 +526,21 @@ object NodeHost {
         refreshWallets()
     }
 
-    fun restoreWalletFile(file: File): org.elektronnet.mobile.wallet.RestoreResult {
+    /**
+     * Restores a wallet file. A Bitcoin Core backup comes back encrypted=false
+     * and asks for a new passphrase; an Electrum wallet (plain or its encrypted
+     * storage blob) is imported through [org.elektronnet.mobile.wallet.ElectrumWalletParser],
+     * with [passphrase] serving as the Electrum password when needed.
+     */
+    fun restoreWalletFile(file: File, passphrase: String? = null): org.elektronnet.mobile.wallet.RestoreResult {
         val restore = walletRestore() ?: return org.elektronnet.mobile.wallet.RestoreResult.Failed(org.elektronnet.mobile.wallet.RestoreFailure.NodeNotReady)
-        val result = restore.restore(file, liveWalletName())
-        if (result is org.elektronnet.mobile.wallet.RestoreResult.Restored && result.encrypted) registerRestored(result.walletName)
+        val name = liveWalletName()
+        val result = restore.restore(file, name, passphrase)
+        if (result is org.elektronnet.mobile.wallet.RestoreResult.Restored) {
+            registry?.add(result.walletName, "")
+            switchWallet(result.walletName)
+            if (result.encrypted) registerRestored(result.walletName)
+        }
         return result
     }
 

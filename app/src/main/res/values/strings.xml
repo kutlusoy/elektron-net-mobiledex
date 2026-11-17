@@ -619,6 +619,11 @@
     <string name="fr_restore_title">Enter your recovery phrase</string>
     <string name="fr_restore_body">Enter your 12 or 24 words separated by spaces.</string>
     <string name="fr_restore_invalid">These words are not a valid recovery phrase. Check spelling and order.</string>
+    <string name="fr_restore_tab_phrase" translatable="false">Recovery phrase</string>
+    <string name="fr_restore_tab_privkey" translatable="false">Private key</string>
+    <string name="fr_restore_key_title" translatable="false">Restore from private key</string>
+    <string name="fr_restore_key_body" translatable="false">Enter a private key in WIF format. Your node will scan the network for associated coins.</string>
+    <string name="fr_restore_key_invalid" translatable="false">This is not a valid private key.</string>
     <string name="fr_restore_count">%1$d words</string>
     <string name="fr_restore_unknown">"%1$s" is not in the word list. Check the spelling.</string>
     <string name="fr_err_node">Your node is not ready yet. Wait a moment and try again.</string>
