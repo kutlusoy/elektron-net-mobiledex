@@ -24,7 +24,7 @@ import org.elektronnet.mobile.R
 const val PSBT_QR_LIMIT = 1800
 
 @Composable
-fun ToolPage(title: String, onBack: () -> Unit, content: @Composable () -> Unit) {
+fun ToolPage(title: String, onBack: () -> Unit, showBack: Boolean = true, content: @Composable () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -33,7 +33,9 @@ fun ToolPage(title: String, onBack: () -> Unit, content: @Composable () -> Unit)
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
+            if (showBack) {
+                TextButton(onClick = onBack) { Text(stringResource(R.string.action_back)) }
+            }
             Text(title, style = MaterialTheme.typography.titleLarge)
         }
         content()

@@ -5,6 +5,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.elektronnet.mobile.ChainConfig
 import org.elektronnet.mobile.node.Chain
 import org.elektronnet.mobile.node.NodeConfig
@@ -53,6 +55,9 @@ object NodeHost {
     var networkServices: NetworkServices? = null
         private set
 
+    var kdfSupervisor: org.elektronnet.mobile.kdf.KdfSupervisor? by mutableStateOf(null)
+        private set
+
     var networkPorts: org.elektronnet.mobile.node.NetworkPorts = ChainConfig.networkPorts
         private set
     private var datadir: File? = null
@@ -75,6 +80,108 @@ object NodeHost {
 
     var wallets: List<OwnWallet> by mutableStateOf(emptyList())
         private set
+
+    /**
+     * Wallet a swap coin lands in. An explicit mapping wins; a UTXO coin on this
+     * node's chain falls back to the active wallet; anything else has none,
+     * because the node does not carry that chain.
+     */
+    fun walletForCoin(coin: String): String? {
+        val mapped = settings?.coinWallets?.get(coin.uppercase())
+        if (mapped != null && wallets.any { it.name == mapped }) return mapped
+        return if (canNodeHold(coin)) activeWallet else null
+    }
+
+    fun canNodeHold(coin: String): Boolean =
+        org.elektronnet.mobile.kdf.KdfConfig.coinsFor(ChainConfig.isTestnet, emptyList())
+            .firstOrNull { it.ticker.equals(coin, ignoreCase = true) }
+            ?.kind == org.elektronnet.mobile.kdf.KdfConfig.KdfCoinKind.UTXO
+
+    fun mapCoinWallet(coin: String, wallet: String) {
+        val store = settings ?: return
+        store.coinWallets = store.coinWallets + (coin.uppercase() to wallet)
+    }
+
+    /** Last automatic move of a swap result, for the swap screen to report. */
+    var lastClaim: Pair<String, String>? by mutableStateOf(null)
+
+    /** Why the last automatic move failed, if it did. */
+    var lastClaimError: String? by mutableStateOf(null)
+
+    /** Coin of a finished swap that has no wallet yet and could get one. */
+    var missingWalletCoin: String? by mutableStateOf(null)
+
+    @Volatile
+    private var claimRunning = false
+
+    /**
+     * Moves the received amount of every finished swap into its coin's wallet,
+     * once per swap. Runs from the runtime tick so it does not depend on the
+     * swap screen being open; a coin this node cannot hold is left alone.
+     */
+    private fun maintainSwapClaims() {
+        val supervisor = kdfSupervisor ?: return
+        if (supervisor.state != org.elektronnet.mobile.kdf.KdfState.Running) return
+        if (claimRunning) return
+        val store = settings ?: return
+        claimRunning = true
+        Thread({
+            try {
+                val claimed = store.claimedSwaps.toMutableSet()
+                val swaps = runCatching { supervisor.getRecentSwapsMerged(10) }.getOrDefault(emptyList())
+                val log = java.io.File(supervisor.kdfDir, "claim.log")
+                fun note(line: String) { runCatching { log.appendText("${System.currentTimeMillis()} $line\n") } }
+                note("tick: ${swaps.size} swaps, claimed=${claimed.size}")
+                for (sw in swaps) {
+                    val decision = org.elektronnet.mobile.kdf.SwapClaimPolicy.decide(
+                        swap = sw,
+                        claimed = claimed,
+                        walletForCoin = ::walletForCoin,
+                        canNodeHold = ::canNodeHold,
+                    ) ?: continue
+                    claimed += sw.uuid
+                    store.claimedSwaps = claimed
+                    note("${decision.action} ${sw.uuid.take(8)} coin=${decision.coin} amount=${decision.amount} wallet=${decision.wallet}")
+                    when (decision.action) {
+                        org.elektronnet.mobile.kdf.ClaimAction.AskForWallet -> missingWalletCoin = decision.coin
+                        org.elektronnet.mobile.kdf.ClaimAction.KeepInMesh -> Unit
+                        org.elektronnet.mobile.kdf.ClaimAction.Claim -> {
+                            val received = org.elektronnet.mobile.kdf.SwapClaimPolicy.amountText(decision.amount)
+                            runCatching {
+                                kotlinx.coroutines.runBlocking {
+                                    withdrawFromKdfToWallet(
+                                        decision.coin,
+                                        decision.wallet!!,
+                                        amount = received,
+                                        max = false,
+                                    )
+                                }
+                            }.onSuccess {
+                                lastClaim = decision.coin to decision.wallet!!
+                                lastClaimError = null
+                                note("ok ${sw.uuid.take(8)} -> ${decision.wallet}")
+                            }.onFailure { error ->
+                                lastClaimError = "${decision.coin}: ${error.message ?: error.javaClass.simpleName}"
+                                note("failed ${sw.uuid.take(8)}: ${error.message}")
+                            }
+                        }
+                    }
+                }
+            } finally {
+                claimRunning = false
+            }
+        }, "kdf-claims").apply { isDaemon = true }.start()
+    }
+
+    // set while the add-wallet screen runs, so the new wallet gets the coin
+    @Volatile
+    var pendingCoinWallet: String? = null
+
+    fun finishPendingCoinWallet() {
+        val coin = pendingCoinWallet ?: return
+        pendingCoinWallet = null
+        mapCoinWallet(coin, activeWallet)
+    }
 
     // a watch-only wallet has no keys on this phone, a signing device signs for it
     fun isWatchOnly(name: String = activeWallet): Boolean = wallets.firstOrNull { it.name == name }?.watchOnly == true
@@ -219,6 +326,10 @@ object NodeHost {
         val datadir = File(app.filesDir, ChainConfig.datadirName)
         datadir.mkdirs()
         this.datadir = datadir
+        // On the isolated testnet the phone is its own peer source: the wallet
+        // line binds this port first and this node finds it here. If this app
+        // owns the port itself, the connection attempt is a no-op.
+        val extraArgs = if (ChainConfig.isTestnet) listOf("-addnode=127.0.0.1:${ChainConfig.p2pPort}") else emptyList()
         val config = NodeConfig(
             binary = File(app.applicationInfo.nativeLibraryDir, "libelektrond.so"),
             datadir = datadir,
@@ -229,6 +340,7 @@ object NodeHost {
             homeDir = app.filesDir,
             network = store.loadNetwork(),
             ports = networkPorts,
+            extraArgs = extraArgs,
         )
         val device = AndroidDeviceState(app, datadir)
         val services = NetworkServices(
@@ -258,6 +370,9 @@ object NodeHost {
         org.elektronnet.mobile.wallet.Amount.styleProvider = { org.elektronnet.mobile.ui.theme.NumberState.style() }
         org.elektronnet.mobile.ui.theme.UpdateState.load()
         org.elektronnet.mobile.ui.theme.UiState.settings = store.loadUi(org.elektronnet.mobile.ui.theme.Palettes.all.map { it.key }.toSet())
+        kdfSupervisor = org.elektronnet.mobile.kdf.KdfSupervisor(
+            context = app,
+        )
         return store
     }
 
@@ -269,7 +384,29 @@ object NodeHost {
         cleanLogsIfDue()
         maintainWallets(snapshot)
         maintainRegistryPeers()
+        maybeAutostartKdf(snapshot)
+        maintainSwapClaims()
         return snapshot
+    }
+
+    @Volatile
+    private var kdfAutostartDone = false
+
+    /**
+     * The DEX is useless while the engine sleeps, so it comes up with the app.
+     * Tried once per launch: a user who stops it from the Swap page keeps it off
+     * until the next start.
+     */
+    private fun maybeAutostartKdf(snapshot: org.elektronnet.mobile.runtime.RuntimeSnapshot) {
+        if (kdfAutostartDone) return
+        val supervisor = kdfSupervisor ?: return
+        val store = settings ?: return
+        if (!store.kdfAutostart) return
+        if (snapshot.status == null) return
+        if (supervisor.state != org.elektronnet.mobile.kdf.KdfState.Stopped) return
+        if (!supervisor.isBinaryAvailable()) return
+        kdfAutostartDone = true
+        supervisor.start()
     }
 
     @Volatile
@@ -417,21 +554,45 @@ object NodeHost {
         )
     }
 
-    fun receiveWallet(): ReceiveWallet? {
+    fun receiveWallet(walletName: String = activeWallet): ReceiveWallet? {
         val supervisor = controller?.current?.takeIf { it.state == NodeState.Running } ?: return null
         val store = settings ?: return null
-        val wallet = activeWallet
         return ReceiveWallet(
             rpc = supervisor.rpc.asWalletRpc(),
             store = object : AddressStore {
                 override var current: String?
-                    get() = store.receiveAddressFor(wallet)
+                    get() = store.receiveAddressFor(walletName)
                     set(value) {
-                        store.setReceiveAddressFor(wallet, value)
+                        store.setReceiveAddressFor(walletName, value)
                     }
             },
-            walletName = wallet,
+            walletName = walletName,
         )
+    }
+
+    suspend fun withdrawFromKdfToWallet(
+        coin: String,
+        targetWallet: String = activeWallet,
+        amount: String? = null,
+        max: Boolean = false,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val supervisor = kdfSupervisor ?: throw IllegalStateException("KDF supervisor not available")
+            val client = supervisor.client
+            val rw = receiveWallet(targetWallet) ?: throw IllegalStateException("Wallet not ready")
+            val targetAddress = rw.newAddress()
+            val draft = client.withdraw(
+                coin = coin,
+                toAddress = targetAddress,
+                amount = amount,
+                max = max,
+            )
+            // the draft comes back unsigned by the network; the node broadcasts reliably,
+            // the engine's own electrum broadcast does not reach our indexer
+            runCatching { rw.broadcast(draft.txHex) }
+                .recoverCatching { client.sendRawTransaction(coin, draft.txHex) }
+                .getOrThrow()
+        }
     }
 
     fun walletReader(): WalletReader? {

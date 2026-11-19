@@ -20,7 +20,7 @@ import org.elektronnet.mobile.service.NodeHost
 import org.elektronnet.mobile.ui.send.SendScreen
 import org.elektronnet.mobile.wallet.EscrowRecord
 
-enum class ToolsPage { Hub, Escrows, EscrowDetail, Psbt, Sweep, Messages }
+enum class ToolsPage { Hub, Escrows, EscrowDetail, Psbt, Sweep, Messages, Swap }
 
 private typealias Page = ToolsPage
 

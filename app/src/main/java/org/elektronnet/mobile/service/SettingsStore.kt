@@ -95,6 +95,33 @@ class SettingsStore(context: Context) {
 
     private inline fun <reified T : Enum<T>> enumOf(name: String?, default: T): T = enumValues<T>().firstOrNull { it.name == name } ?: default
 
+    /** Start the swap engine together with the app instead of waiting for a tap. */
+    var kdfAutostart: Boolean
+        get() = prefs.getBoolean(KDF_AUTOSTART, true)
+        set(value) = prefs.edit().putBoolean(KDF_AUTOSTART, value).apply()
+
+    /**
+     * Which app wallet a swap coin belongs to. A UTXO coin on this node's chain
+     * falls back to the active wallet, so a finished swap can be moved there
+     * without asking; other coins have no app wallet at all.
+     */
+    var coinWallets: Map<String, String>
+        get() = runCatching {
+            (Json.parse(prefs.getString(COIN_WALLETS, null) ?: "{}") as Map<*, *>)
+                .mapNotNull { (k, v) -> (k as? String)?.let { key -> (v as? String)?.let { key.uppercase() to it } } }
+                .toMap()
+        }.getOrDefault(emptyMap())
+        set(value) = prefs.edit()
+            .putString(COIN_WALLETS, Json.stringify(value.mapKeys { it.key.uppercase() }))
+            .apply()
+
+    /** Swaps whose received amount was already moved into a wallet. */
+    var claimedSwaps: Set<String>
+        get() = runCatching {
+            (Json.parse(prefs.getString(CLAIMED_SWAPS, null) ?: "[]") as List<*>).mapNotNull { it as? String }.toSet()
+        }.getOrDefault(emptySet())
+        set(value) = prefs.edit().putString(CLAIMED_SWAPS, Json.stringify(value.toList().takeLast(200))).apply()
+
     fun walletReady(): Boolean = prefs.getBoolean(WALLET_READY, false)
 
     fun setWalletReady(value: Boolean) = prefs.edit().putBoolean(WALLET_READY, value).apply()
@@ -312,6 +339,9 @@ class SettingsStore(context: Context) {
     }
 
     private companion object {
+        const val KDF_AUTOSTART = "kdf_autostart"
+        const val COIN_WALLETS = "coin_wallets"
+        const val CLAIMED_SWAPS = "claimed_swaps"
         const val USER_STOPPED = "user_stopped"
         const val USER_PAUSED = "user_paused"
         const val BACKGROUND = "background_enabled"

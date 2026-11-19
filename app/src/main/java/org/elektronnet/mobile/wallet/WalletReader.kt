@@ -42,6 +42,9 @@ data class TxItem(
 }
 
 class WalletReader(private val rpc: WalletRpc, private val walletName: String = WalletBootstrap.DEFAULT_WALLET) {
+    /** Hands a raw transaction to this node; returns the txid. */
+    fun broadcast(txHex: String): String = rpc.call("sendrawtransaction", listOf(txHex), null).toString()
+
     fun balances(): Balances {
         val mine = (rpc.call("getbalances", emptyList<Any?>(), walletName) as Map<*, *>)["mine"] as Map<*, *>
         return Balances(lep(mine["trusted"]), lep(mine["untrusted_pending"]), lep(mine["immature"]), lep(mine["used"]))

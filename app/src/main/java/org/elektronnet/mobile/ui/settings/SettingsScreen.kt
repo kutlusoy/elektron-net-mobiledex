@@ -23,7 +23,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.Switch
+import androidx.compose.material3.OutlinedTextField
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -136,6 +138,61 @@ fun SettingsScreen(
         }
         GlassCard {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) { ExplorerSection(explorers, onExplorers) }
+        }
+        SettingsCard(R.string.settings_dex) {
+            var kdfAutostart by remember { mutableStateOf(NodeHost.store?.kdfAutostart != false) }
+            ToggleRow(R.string.settings_kdf_autostart, R.string.settings_kdf_autostart_hint, kdfAutostart) {
+                kdfAutostart = it
+                NodeHost.store?.kdfAutostart = it
+            }
+            val supervisor = NodeHost.kdfSupervisor
+            val profile = remember(supervisor?.state) { supervisor?.networkProfile }
+            var seeds by remember(profile) { mutableStateOf(profile?.seeds?.joinToString("\n").orEmpty()) }
+            var electrum by remember(profile) { mutableStateOf(profile?.electrum?.joinToString("\n").orEmpty()) }
+            var relay by remember(profile) { mutableStateOf(profile?.relayIp.orEmpty()) }
+            var saved by remember { mutableStateOf(false) }
+            Hint(stringResource(R.string.settings_net_profile_hint))
+            OutlinedTextField(
+                value = seeds,
+                onValueChange = { seeds = it; saved = false },
+                label = { Text(stringResource(R.string.settings_net_seeds)) },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = electrum,
+                onValueChange = { electrum = it; saved = false },
+                label = { Text(stringResource(R.string.settings_net_electrum)) },
+                minLines = 1,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = relay,
+                onValueChange = { relay = it; saved = false },
+                label = { Text(stringResource(R.string.settings_net_relay)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            val electrumLines = electrum.lines().map { it.trim() }.filter { it.isNotEmpty() }
+            val invalid = electrumLines.firstOrNull { !org.elektronnet.mobile.kdf.KdfNetProfile.validEndpoint(it) }
+            if (invalid != null) {
+                Hint(stringResource(R.string.settings_net_invalid, invalid))
+            }
+            Button(
+                onClick = {
+                    supervisor?.saveNetworkProfile(
+                        org.elektronnet.mobile.kdf.NetworkProfile(
+                            seeds = seeds.lines().map { it.trim() }.filter { it.isNotEmpty() },
+                            electrum = electrumLines,
+                            relayIp = relay.trim().ifEmpty { null },
+                        ),
+                    )
+                    saved = true
+                },
+                enabled = invalid == null,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text(stringResource(R.string.settings_net_save)) }
+            if (saved) Hint(stringResource(R.string.settings_net_saved)) 
         }
         SettingsCard(R.string.settings_security) {
             ToggleRow(R.string.settings_biometric, R.string.settings_biometric_hint, biometric, onBiometric)

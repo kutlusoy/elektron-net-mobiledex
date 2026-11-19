@@ -17,6 +17,9 @@ class ReceiveWallet(
         return newAddress()
     }
 
+    /** Hands a raw transaction to this node; returns the txid. */
+    fun broadcast(txHex: String): String = rpc.call("sendrawtransaction", listOf(txHex), null).toString()
+
     fun newAddress(): String {
         val address = try {
             rpc.call("getnewaddress", linkedMapOf("address_type" to "bech32"), walletName).toString()
